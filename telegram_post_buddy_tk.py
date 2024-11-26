@@ -16,20 +16,22 @@ def load_env_variables():
     token_input.delete(0, tk.END)
     channel_input.delete(0, tk.END)
     mini_app_input.delete(0, tk.END)
+    button_label_input.delete(0, tk.END)
     token_input.insert(0, os.getenv("BOT_TOKEN", ""))
     channel_input.insert(0, os.getenv("CHANNEL_NAME", ""))
     mini_app_input.insert(0, os.getenv("MINI_APP_URL", ""))
+    button_label_input.insert(0, os.getenv("BUTTON_LABEL", "Open Mini App"))
     messagebox.showinfo("Info", "Loaded credentials from .env file.")
 
 
 # Function to send the message, image, and inline button
-async def async_send_message(token, channel, message, mini_app_url):
+async def async_send_message(token, channel, message, mini_app_url, button_label):
     try:
         bot = Bot(token=token)
 
         # Create inline button for the mini app
         reply_markup = InlineKeyboardMarkup(
-            [[InlineKeyboardButton("Open Mini App", url=mini_app_url)]]
+            [[InlineKeyboardButton(button_label, url=mini_app_url)]]
         )
 
         if image_path:
@@ -56,15 +58,17 @@ def send_message():
     channel = channel_input.get().strip()
     message = text_input.get("1.0", tk.END).strip()
     mini_app_url = mini_app_input.get().strip()
+    button_label = button_label_input.get().strip()
 
-    if not token or not channel or not message or not mini_app_url:
+    if not token or not channel or not message or not mini_app_url or not button_label:
         messagebox.showerror(
-            "Error", "Bot Token, Channel Name, Message, and Mini App URL are required!"
+            "Error",
+            "Bot Token, Channel Name, Message, Mini App URL, and Button Label are required!",
         )
         return
 
     # Run the async send message function
-    asyncio.run(async_send_message(token, channel, message, mini_app_url))
+    asyncio.run(async_send_message(token, channel, message, mini_app_url, button_label))
 
 
 # Function to upload an image
@@ -90,6 +94,7 @@ def clear_inputs():
     channel_input.delete(0, tk.END)
     text_input.delete("1.0", tk.END)
     mini_app_input.delete(0, tk.END)
+    button_label_input.delete(0, tk.END)
     image_label.config(image="")
     image_label.image = None
     image_path = None
@@ -98,7 +103,7 @@ def clear_inputs():
 # Set up the Tkinter GUI
 root = tk.Tk()
 root.title("Telegram Mini App Sender")
-root.geometry("400x700")
+root.geometry("400x800")
 
 # Button to load credentials from .env
 env_button = tk.Button(
@@ -122,6 +127,11 @@ channel_input.pack(pady=5)
 tk.Label(root, text="Telegram Mini App URL:", font=("Arial", 12)).pack(pady=5)
 mini_app_input = tk.Entry(root, width=40, font=("Arial", 12))
 mini_app_input.pack(pady=5)
+
+# Input for Button Label
+tk.Label(root, text="Mini App Button Label:", font=("Arial", 12)).pack(pady=5)
+button_label_input = tk.Entry(root, width=40, font=("Arial", 12))
+button_label_input.pack(pady=5)
 
 # Label and Textbox for Message
 tk.Label(root, text="Write Your Message:", font=("Arial", 12)).pack(pady=5)

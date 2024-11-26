@@ -19,7 +19,6 @@ from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from dotenv import load_dotenv
 import os
 
-
 # Initialize global variable for the image file path
 image_path = None
 
@@ -56,6 +55,11 @@ class TelegramSenderApp(QWidget):
         self.layout.addWidget(self.mini_app_label)
         self.mini_app_input = QLineEdit()
         self.layout.addWidget(self.mini_app_input)
+
+        self.button_label_label = QLabel("Mini App Button Label:")
+        self.layout.addWidget(self.button_label_label)
+        self.button_label_input = QLineEdit()
+        self.layout.addWidget(self.button_label_input)
 
         # Message input
         self.message_label = QLabel("Write Your Message:")
@@ -96,13 +100,16 @@ class TelegramSenderApp(QWidget):
         self.move(frame_geometry.topLeft())
 
     def load_env_variables(self):
+        """Load variables from the .env file."""
         load_dotenv()
         self.token_input.setText(os.getenv("BOT_TOKEN", ""))
         self.channel_input.setText(os.getenv("CHANNEL_NAME", ""))
         self.mini_app_input.setText(os.getenv("MINI_APP_URL", ""))
+        self.button_label_input.setText(os.getenv("BUTTON_LABEL", "Open Mini App"))
         QMessageBox.information(self, "Info", "Loaded credentials from .env file.")
 
     def upload_image(self):
+        """Upload an image and display its preview."""
         global image_path
         image_path, _ = QFileDialog.getOpenFileName(
             self, "Upload Image", "", "Image Files (*.png *.jpg *.jpeg *.gif)"
@@ -111,12 +118,15 @@ class TelegramSenderApp(QWidget):
             pixmap = QPixmap(image_path).scaled(300, 300, Qt.KeepAspectRatio)
             self.image_label.setPixmap(pixmap)
 
-    async def async_send_message(self, token, channel, message, mini_app_url):
+    async def async_send_message(
+        self, token, channel, message, mini_app_url, button_label
+    ):
+        """Send the message asynchronously using the Telegram Bot API."""
         try:
             bot = Bot(token=token)
             # Inline keyboard for mini app
             reply_markup = InlineKeyboardMarkup(
-                [[InlineKeyboardButton("Open Mini App", url=mini_app_url)]]
+                [[InlineKeyboardButton(button_label, url=mini_app_url)]]
             )
             if image_path:
                 with open(image_path, "rb") as photo:
@@ -136,22 +146,34 @@ class TelegramSenderApp(QWidget):
             QMessageBox.critical(self, "Error", f"Failed to send message: {e}")
 
     def send_message(self):
+        """Collect input data and send the message."""
         token = self.token_input.text().strip()
         channel = self.channel_input.text().strip()
         message = self.message_input.toPlainText().strip()
         mini_app_url = self.mini_app_input.text().strip()
+        button_label = self.button_label_input.text().strip()
 
-        if not token or not channel or not message or not mini_app_url:
+        if (
+            not token
+            or not channel
+            or not message
+            or not mini_app_url
+            or not button_label
+        ):
             QMessageBox.warning(self, "Error", "All fields are required!")
             return
 
-        asyncio.run(self.async_send_message(token, channel, message, mini_app_url))
+        asyncio.run(
+            self.async_send_message(token, channel, message, mini_app_url, button_label)
+        )
 
     def clear_inputs(self):
+        """Clear all input fields and reset the form."""
         global image_path
         self.token_input.clear()
         self.channel_input.clear()
         self.mini_app_input.clear()
+        self.button_label_input.clear()
         self.message_input.clear()
         self.image_label.clear()
         image_path = None

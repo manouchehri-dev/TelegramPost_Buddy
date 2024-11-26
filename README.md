@@ -85,6 +85,7 @@
 BOT_TOKEN=YOUR_BOT_TOKEN
 MINI_APP_URL=https://example.com
 CHANNEL_NAME=@my_channel
+BUTTON_LABEL=Play
 ```
 
 ## Contributing
