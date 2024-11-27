@@ -22,13 +22,17 @@ load_dotenv()
     MANAGE_URLS,
     ADD_NEW_URL,
     ADD_NEW_LABEL,
+    EDIT_URL,
+    EDIT_LABEL,
     INSERT_POST,
     URL_SELECTION,
     LABEL_SELECTION,
     WAITING_FOR_TEXT,
     WAITING_FOR_IMAGE,
     CONFIRM_POST,
-) = range(11)
+    WAITING_FOR_URL_EDIT,
+    WAITING_FOR_LABEL_EDIT,
+) = range(15)
 
 # Store admins and post data
 admins = set()
@@ -72,11 +76,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def manage_urls_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show URL management menu"""
+    """Show URL and label management menu"""
     keyboard = [
         [InlineKeyboardButton("Add New URL", callback_data="add_url")],
         [InlineKeyboardButton("Add New Label", callback_data="add_label")],
-        [InlineKeyboardButton("View All", callback_data="view_all")],
+        [InlineKeyboardButton("View URLs", callback_data="view_urls")],
+        [InlineKeyboardButton("View Labels", callback_data="view_labels")],
         [InlineKeyboardButton("Back to Main Menu", callback_data="back_to_main")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -89,23 +94,49 @@ async def manage_urls_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return MANAGE_URLS
 
 
-async def view_all_urls_labels(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Display all URLs and labels"""
-    query = update.callback_query
-    await query.answer()
-
-    text = "Existing URLs and Labels:\n\nURLs:\n"
+async def view_urls(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Display all URLs with edit/delete options"""
+    keyboard = []
     for url in urls_and_labels["urls"]:
-        text += f"• {url}\n"
-
-    text += "\nLabels:\n"
-    for label in urls_and_labels["labels"]:
-        text += f"• {label}\n"
-
-    keyboard = [[InlineKeyboardButton("Back", callback_data="manage_urls")]]
+        keyboard.append(
+            [
+                InlineKeyboardButton(f"📝 {url}", callback_data=f"edit_url:{url}"),
+                InlineKeyboardButton("❌", callback_data=f"delete_url:{url}"),
+            ]
+        )
+    keyboard.append([InlineKeyboardButton("Back", callback_data="manage_urls")])
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await query.message.edit_text(text, reply_markup=reply_markup)
+    text = "URLs (click to edit, ❌ to delete):"
+    if update.callback_query:
+        await update.callback_query.answer()
+        await update.callback_query.message.edit_text(text, reply_markup=reply_markup)
+    else:
+        await update.message.reply_text(text, reply_markup=reply_markup)
+    return MANAGE_URLS
+
+
+async def view_labels(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Display all labels with edit/delete options"""
+    keyboard = []
+    for label in urls_and_labels["labels"]:
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    f"📝 {label}", callback_data=f"edit_label:{label}"
+                ),
+                InlineKeyboardButton("❌", callback_data=f"delete_label:{label}"),
+            ]
+        )
+    keyboard.append([InlineKeyboardButton("Back", callback_data="manage_urls")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    text = "Labels (click to edit, ❌ to delete):"
+    if update.callback_query:
+        await update.callback_query.answer()
+        await update.callback_query.message.edit_text(text, reply_markup=reply_markup)
+    else:
+        await update.message.reply_text(text, reply_markup=reply_markup)
     return MANAGE_URLS
 
 
@@ -133,6 +164,36 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.edit_text("Only admins can manage URLs and labels.")
             return ConversationHandler.END
 
+    elif query.data == "view_urls":
+        return await view_urls(update, context)
+
+    elif query.data == "view_labels":
+        return await view_labels(update, context)
+
+    elif query.data.startswith("edit_url:"):
+        url = query.data.replace("edit_url:", "")
+        context.user_data["editing_url"] = url
+        await query.message.edit_text(f"Please enter new URL to replace:\n{url}")
+        return WAITING_FOR_URL_EDIT
+
+    elif query.data.startswith("edit_label:"):
+        label = query.data.replace("edit_label:", "")
+        context.user_data["editing_label"] = label
+        await query.message.edit_text(f"Please enter new label to replace:\n{label}")
+        return WAITING_FOR_LABEL_EDIT
+
+    elif query.data.startswith("delete_url:"):
+        url = query.data.replace("delete_url:", "")
+        urls_and_labels["urls"].remove(url)
+        save_urls_and_labels(urls_and_labels)
+        return await view_urls(update, context)
+
+    elif query.data.startswith("delete_label:"):
+        label = query.data.replace("delete_label:", "")
+        urls_and_labels["labels"].remove(label)
+        save_urls_and_labels(urls_and_labels)
+        return await view_labels(update, context)
+
     elif query.data == "add_url":
         await query.message.edit_text("Please enter the new URL:")
         return ADD_NEW_URL
@@ -140,9 +201,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "add_label":
         await query.message.edit_text("Please enter the new label:")
         return ADD_NEW_LABEL
-
-    elif query.data == "view_all":
-        return await view_all_urls_labels(update, context)
 
     elif query.data == "back_to_main":
         keyboard = [
@@ -256,6 +314,8 @@ async def handle_new_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if "adding_new" in context.user_data:
         # Adding URL during post creation
         context.user_data["post_data"]["url"] = new_url
+        urls_and_labels["urls"].append(new_url)
+        save_urls_and_labels(urls_and_labels)
         # Show label selection
         keyboard = []
         for label in urls_and_labels["labels"]:
@@ -284,6 +344,8 @@ async def handle_new_label(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if "adding_new" in context.user_data:
         # Adding label during post creation
         context.user_data["post_data"]["label"] = new_label
+        urls_and_labels["labels"].append(new_label)
+        save_urls_and_labels(urls_and_labels)
         await update.message.reply_text("Please enter the post text:")
         return WAITING_FOR_TEXT
     else:
@@ -292,6 +354,30 @@ async def handle_new_label(update: Update, context: ContextTypes.DEFAULT_TYPE):
         save_urls_and_labels(urls_and_labels)
         await update.message.reply_text(f"Label added: {new_label}")
         return await manage_urls_menu(update, context)
+
+
+async def handle_url_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle URL editing"""
+    new_url = update.message.text
+    old_url = context.user_data["editing_url"]
+    idx = urls_and_labels["urls"].index(old_url)
+    urls_and_labels["urls"][idx] = new_url
+    save_urls_and_labels(urls_and_labels)
+    await update.message.reply_text(f"URL updated from:\n{old_url}\nto:\n{new_url}")
+    return await view_urls(update, context)
+
+
+async def handle_label_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle label editing"""
+    new_label = update.message.text
+    old_label = context.user_data["editing_label"]
+    idx = urls_and_labels["labels"].index(old_label)
+    urls_and_labels["labels"][idx] = new_label
+    save_urls_and_labels(urls_and_labels)
+    await update.message.reply_text(
+        f"Label updated from:\n{old_label}\nto:\n{new_label}"
+    )
+    return await view_labels(update, context)
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -340,6 +426,12 @@ def main():
             ],
             ADD_NEW_LABEL: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_new_label)
+            ],
+            WAITING_FOR_URL_EDIT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url_edit)
+            ],
+            WAITING_FOR_LABEL_EDIT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_label_edit)
             ],
             URL_SELECTION: [CallbackQueryHandler(button_handler)],
             LABEL_SELECTION: [CallbackQueryHandler(button_handler)],
