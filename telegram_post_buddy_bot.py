@@ -1,4 +1,5 @@
 import os
+import json
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -18,23 +19,49 @@ load_dotenv()
 (
     MAIN_MENU,
     ADD_ADMIN,
+    MANAGE_URLS,
+    ADD_NEW_URL,
+    ADD_NEW_LABEL,
     INSERT_POST,
-    WAITING_FOR_URL,
-    WAITING_FOR_LABEL,
+    URL_SELECTION,
+    LABEL_SELECTION,
     WAITING_FOR_TEXT,
     WAITING_FOR_IMAGE,
     CONFIRM_POST,
-) = range(8)
+) = range(11)
 
 # Store admins and post data
 admins = set()
 post_data = {}
+
+# File to store URLs and labels
+URLS_FILE = "urls_and_labels.json"
+
+
+def load_urls_and_labels():
+    """Load URLs and labels from file"""
+    try:
+        with open(URLS_FILE, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {"urls": [], "labels": []}
+
+
+def save_urls_and_labels(data):
+    """Save URLs and labels to file"""
+    with open(URLS_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+# Load existing URLs and labels
+urls_and_labels = load_urls_and_labels()
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start command handler - shows main menu"""
     keyboard = [
         [InlineKeyboardButton("Add Admin", callback_data="add_admin")],
+        [InlineKeyboardButton("Manage URLs & Labels", callback_data="manage_urls")],
         [InlineKeyboardButton("Insert Post", callback_data="insert_post")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -44,13 +71,50 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return MAIN_MENU
 
 
+async def manage_urls_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show URL management menu"""
+    keyboard = [
+        [InlineKeyboardButton("Add New URL", callback_data="add_url")],
+        [InlineKeyboardButton("Add New Label", callback_data="add_label")],
+        [InlineKeyboardButton("View All", callback_data="view_all")],
+        [InlineKeyboardButton("Back to Main Menu", callback_data="back_to_main")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    text = "URL and Label Management"
+
+    if update.callback_query:
+        await update.callback_query.message.edit_text(text, reply_markup=reply_markup)
+    else:
+        await update.message.reply_text(text, reply_markup=reply_markup)
+    return MANAGE_URLS
+
+
+async def view_all_urls_labels(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Display all URLs and labels"""
+    query = update.callback_query
+    await query.answer()
+
+    text = "Existing URLs and Labels:\n\nURLs:\n"
+    for url in urls_and_labels["urls"]:
+        text += f"• {url}\n"
+
+    text += "\nLabels:\n"
+    for label in urls_and_labels["labels"]:
+        text += f"• {label}\n"
+
+    keyboard = [[InlineKeyboardButton("Back", callback_data="manage_urls")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await query.message.edit_text(text, reply_markup=reply_markup)
+    return MANAGE_URLS
+
+
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle button presses"""
     query = update.callback_query
     await query.answer()
 
     if query.data == "add_admin":
-        # Check if user is owner
         if str(query.from_user.id) == os.getenv("OWNER_ID"):
             await query.message.edit_text(
                 "Please forward a message from the user you want to add as admin."
@@ -60,24 +124,96 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.edit_text("Only the owner can add admins.")
             return ConversationHandler.END
 
+    elif query.data == "manage_urls":
+        if str(query.from_user.id) in admins or str(query.from_user.id) == os.getenv(
+            "OWNER_ID"
+        ):
+            return await manage_urls_menu(update, context)
+        else:
+            await query.message.edit_text("Only admins can manage URLs and labels.")
+            return ConversationHandler.END
+
+    elif query.data == "add_url":
+        await query.message.edit_text("Please enter the new URL:")
+        return ADD_NEW_URL
+
+    elif query.data == "add_label":
+        await query.message.edit_text("Please enter the new label:")
+        return ADD_NEW_LABEL
+
+    elif query.data == "view_all":
+        return await view_all_urls_labels(update, context)
+
+    elif query.data == "back_to_main":
+        keyboard = [
+            [InlineKeyboardButton("Add Admin", callback_data="add_admin")],
+            [InlineKeyboardButton("Manage URLs & Labels", callback_data="manage_urls")],
+            [InlineKeyboardButton("Insert Post", callback_data="insert_post")],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.message.edit_text("Main Menu:", reply_markup=reply_markup)
+        return MAIN_MENU
+
     elif query.data == "insert_post":
-        # Check if user is admin or owner
         if str(query.from_user.id) in admins or str(query.from_user.id) == os.getenv(
             "OWNER_ID"
         ):
             context.user_data["post_data"] = {}
-            await query.message.edit_text("Please enter the web app URL:")
-            return WAITING_FOR_URL
+            # Show URL selection buttons
+            keyboard = []
+            for url in urls_and_labels["urls"]:
+                keyboard.append([InlineKeyboardButton(url, callback_data=f"url:{url}")])
+            keyboard.append(
+                [InlineKeyboardButton("Add New URL", callback_data="new_url")]
+            )
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.message.edit_text(
+                "Select a URL or add a new one:", reply_markup=reply_markup
+            )
+            return URL_SELECTION
         else:
             await query.message.edit_text("Only admins can create posts.")
             return ConversationHandler.END
+
+    elif query.data.startswith("url:"):
+        url = query.data.replace("url:", "")
+        context.user_data["post_data"]["url"] = url
+        # Show label selection buttons
+        keyboard = []
+        for label in urls_and_labels["labels"]:
+            keyboard.append(
+                [InlineKeyboardButton(label, callback_data=f"label:{label}")]
+            )
+        keyboard.append(
+            [InlineKeyboardButton("Add New Label", callback_data="new_label")]
+        )
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.message.edit_text(
+            "Select a label or add a new one:", reply_markup=reply_markup
+        )
+        return LABEL_SELECTION
+
+    elif query.data.startswith("label:"):
+        label = query.data.replace("label:", "")
+        context.user_data["post_data"]["label"] = label
+        await query.message.edit_text("Please enter the post text:")
+        return WAITING_FOR_TEXT
+
+    elif query.data == "new_url":
+        await query.message.edit_text("Please enter the new URL:")
+        context.user_data["adding_new"] = "url"
+        return ADD_NEW_URL
+
+    elif query.data == "new_label":
+        await query.message.edit_text("Please enter the new label:")
+        context.user_data["adding_new"] = "label"
+        return ADD_NEW_LABEL
 
     elif query.data == "confirm_post":
         # Send post to channel
         post_data = context.user_data.get("post_data", {})
         channel_id = os.getenv("CHANNEL_ID")
 
-        # Create inline keyboard with web app button
         keyboard = [
             [
                 InlineKeyboardButton(
@@ -88,7 +224,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        # Send image with caption and button
         await context.bot.send_photo(
             chat_id=channel_id,
             photo=post_data.get("image"),
@@ -115,18 +250,48 @@ async def handle_admin_forward(update: Update, context: ContextTypes.DEFAULT_TYP
     return ConversationHandler.END
 
 
-async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle web app URL input"""
-    context.user_data["post_data"]["url"] = update.message.text
-    await update.message.reply_text("Please enter the button label text:")
-    return WAITING_FOR_LABEL
+async def handle_new_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle new URL input"""
+    new_url = update.message.text
+    if "adding_new" in context.user_data:
+        # Adding URL during post creation
+        context.user_data["post_data"]["url"] = new_url
+        # Show label selection
+        keyboard = []
+        for label in urls_and_labels["labels"]:
+            keyboard.append(
+                [InlineKeyboardButton(label, callback_data=f"label:{label}")]
+            )
+        keyboard.append(
+            [InlineKeyboardButton("Add New Label", callback_data="new_label")]
+        )
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            "Select a label or add a new one:", reply_markup=reply_markup
+        )
+        return LABEL_SELECTION
+    else:
+        # Adding URL from management menu
+        urls_and_labels["urls"].append(new_url)
+        save_urls_and_labels(urls_and_labels)
+        await update.message.reply_text(f"URL added: {new_url}")
+        return await manage_urls_menu(update, context)
 
 
-async def handle_label(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle button label input"""
-    context.user_data["post_data"]["label"] = update.message.text
-    await update.message.reply_text("Please enter the post text:")
-    return WAITING_FOR_TEXT
+async def handle_new_label(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle new label input"""
+    new_label = update.message.text
+    if "adding_new" in context.user_data:
+        # Adding label during post creation
+        context.user_data["post_data"]["label"] = new_label
+        await update.message.reply_text("Please enter the post text:")
+        return WAITING_FOR_TEXT
+    else:
+        # Adding label from management menu
+        urls_and_labels["labels"].append(new_label)
+        save_urls_and_labels(urls_and_labels)
+        await update.message.reply_text(f"Label added: {new_label}")
+        return await manage_urls_menu(update, context)
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -169,12 +334,15 @@ def main():
         states={
             MAIN_MENU: [CallbackQueryHandler(button_handler)],
             ADD_ADMIN: [MessageHandler(filters.ALL, handle_admin_forward)],
-            WAITING_FOR_URL: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url)
+            MANAGE_URLS: [CallbackQueryHandler(button_handler)],
+            ADD_NEW_URL: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_new_url)
             ],
-            WAITING_FOR_LABEL: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_label)
+            ADD_NEW_LABEL: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_new_label)
             ],
+            URL_SELECTION: [CallbackQueryHandler(button_handler)],
+            LABEL_SELECTION: [CallbackQueryHandler(button_handler)],
             WAITING_FOR_TEXT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text)
             ],
