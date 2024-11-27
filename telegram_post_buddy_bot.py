@@ -1,6 +1,6 @@
 import os
 import json
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -18,6 +18,7 @@ load_dotenv()
 # States for conversation handler
 (
     MAIN_MENU,
+    ADMIN_MENU,
     ADD_ADMIN,
     MANAGE_URLS,
     ADD_NEW_URL,
@@ -32,10 +33,29 @@ load_dotenv()
     CONFIRM_POST,
     WAITING_FOR_URL_EDIT,
     WAITING_FOR_LABEL_EDIT,
-) = range(15)
+    WAITING_FOR_ADMIN_ID,
+) = range(17)
 
 # Store admins and post data
-admins = set()
+ADMINS_FILE = "admins.json"
+
+
+def load_admins():
+    """Load admins from file"""
+    try:
+        with open(ADMINS_FILE, "r") as f:
+            return set(json.load(f))
+    except FileNotFoundError:
+        return set()
+
+
+def save_admins(admins):
+    """Save admins to file"""
+    with open(ADMINS_FILE, "w") as f:
+        json.dump(list(admins), f)
+
+
+admins = load_admins()
 post_data = {}
 
 # File to store URLs and labels
@@ -64,7 +84,7 @@ urls_and_labels = load_urls_and_labels()
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start command handler - shows main menu"""
     keyboard = [
-        [InlineKeyboardButton("Add Admin", callback_data="add_admin")],
+        [InlineKeyboardButton("Manage Admins", callback_data="manage_admins")],
         [InlineKeyboardButton("Manage URLs & Labels", callback_data="manage_urls")],
         [InlineKeyboardButton("Insert Post", callback_data="insert_post")],
     ]
@@ -73,6 +93,47 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Welcome! Please select an option:", reply_markup=reply_markup
     )
     return MAIN_MENU
+
+
+async def admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show admin management menu"""
+    keyboard = [
+        [InlineKeyboardButton("Add Admin", callback_data="add_admin")],
+        [InlineKeyboardButton("View/Remove Admins", callback_data="view_admins")],
+        [InlineKeyboardButton("Back to Main Menu", callback_data="back_to_main")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    text = "Admin Management"
+
+    if update.callback_query:
+        await update.callback_query.message.edit_text(text, reply_markup=reply_markup)
+    else:
+        await update.message.reply_text(text, reply_markup=reply_markup)
+    return ADMIN_MENU
+
+
+async def view_admins(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Display all admins with remove option"""
+    keyboard = []
+    for admin_id in admins:
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    f"Admin: {admin_id}", callback_data=f"admin_info:{admin_id}"
+                ),
+                InlineKeyboardButton("❌", callback_data=f"remove_admin:{admin_id}"),
+            ]
+        )
+    keyboard.append([InlineKeyboardButton("Back", callback_data="manage_admins")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    text = "Current Admins (❌ to remove):"
+    if update.callback_query:
+        await update.callback_query.answer()
+        await update.callback_query.message.edit_text(text, reply_markup=reply_markup)
+    else:
+        await update.message.reply_text(text, reply_markup=reply_markup)
+    return ADMIN_MENU
 
 
 async def manage_urls_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -145,12 +206,32 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    if query.data == "add_admin":
+    if query.data == "manage_admins":
+        if str(query.from_user.id) == os.getenv("OWNER_ID"):
+            return await admin_menu(update, context)
+        else:
+            await query.message.edit_text("Only the owner can manage admins.")
+            return ConversationHandler.END
+
+    elif query.data == "view_admins":
+        return await view_admins(update, context)
+
+    elif query.data.startswith("remove_admin:"):
+        if str(query.from_user.id) == os.getenv("OWNER_ID"):
+            admin_id = query.data.replace("remove_admin:", "")
+            admins.remove(admin_id)
+            save_admins(admins)
+            return await view_admins(update, context)
+        else:
+            await query.message.edit_text("Only the owner can remove admins.")
+            return ConversationHandler.END
+
+    elif query.data == "add_admin":
         if str(query.from_user.id) == os.getenv("OWNER_ID"):
             await query.message.edit_text(
-                "Please forward a message from the user you want to add as admin."
+                "Please enter the Telegram ID of the user you want to add as admin:"
             )
-            return ADD_ADMIN
+            return WAITING_FOR_ADMIN_ID
         else:
             await query.message.edit_text("Only the owner can add admins.")
             return ConversationHandler.END
@@ -204,7 +285,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif query.data == "back_to_main":
         keyboard = [
-            [InlineKeyboardButton("Add Admin", callback_data="add_admin")],
+            [InlineKeyboardButton("Manage Admins", callback_data="manage_admins")],
             [InlineKeyboardButton("Manage URLs & Labels", callback_data="manage_urls")],
             [InlineKeyboardButton("Insert Post", callback_data="insert_post")],
         ]
@@ -223,6 +304,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 keyboard.append([InlineKeyboardButton(url, callback_data=f"url:{url}")])
             keyboard.append(
                 [InlineKeyboardButton("Add New URL", callback_data="new_url")]
+            )
+            keyboard.append(
+                [
+                    InlineKeyboardButton(
+                        "Back to Main Menu", callback_data="back_to_main"
+                    )
+                ]
             )
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.message.edit_text(
@@ -245,6 +333,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append(
             [InlineKeyboardButton("Add New Label", callback_data="new_label")]
         )
+        keyboard.append([InlineKeyboardButton("Back", callback_data="insert_post")])
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.message.edit_text(
             "Select a label or add a new one:", reply_markup=reply_markup
@@ -254,8 +343,60 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data.startswith("label:"):
         label = query.data.replace("label:", "")
         context.user_data["post_data"]["label"] = label
-        await query.message.edit_text("Please enter the post text:")
+        keyboard = [
+            [InlineKeyboardButton("Add Text", callback_data="add_text")],
+            [InlineKeyboardButton("Skip Text", callback_data="skip_text")],
+            [InlineKeyboardButton("Back", callback_data="insert_post")],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.message.edit_text(
+            "Would you like to add text to your post?", reply_markup=reply_markup
+        )
         return WAITING_FOR_TEXT
+
+    elif query.data == "add_text":
+        await query.message.edit_text(
+            "Please enter the post text:\n\n(Send /cancel to go back to main menu)"
+        )
+        context.user_data["post_data"]["adding_text"] = True
+        return WAITING_FOR_TEXT
+
+    elif query.data == "skip_text":
+        context.user_data["post_data"]["text"] = ""  # Empty text
+        keyboard = [
+            [InlineKeyboardButton("Add Image", callback_data="add_image")],
+            [InlineKeyboardButton("Skip Image", callback_data="skip_image")],
+            [InlineKeyboardButton("Back", callback_data="insert_post")],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.message.edit_text(
+            "Would you like to add an image to your post?", reply_markup=reply_markup
+        )
+        return WAITING_FOR_IMAGE
+
+    elif query.data == "add_image":
+        await query.message.edit_text(
+            "Please send the image for the post:\n\n(Send /cancel to go back to main menu)"
+        )
+        context.user_data["post_data"]["adding_image"] = True
+        return WAITING_FOR_IMAGE
+
+    elif query.data == "skip_image":
+        post_data = context.user_data.get("post_data", {})
+        preview_text = (
+            f"Preview:\n\nURL: {post_data['url']}\nLabel: {post_data['label']}"
+        )
+        if post_data.get("text"):
+            preview_text += f"\nText: {post_data['text']}"
+
+        keyboard = [
+            [InlineKeyboardButton("Confirm & Send", callback_data="confirm_post")],
+            [InlineKeyboardButton("Cancel", callback_data="cancel_post")],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await query.message.edit_text(preview_text, reply_markup=reply_markup)
+        return CONFIRM_POST
 
     elif query.data == "new_url":
         await query.message.edit_text("Please enter the new URL:")
@@ -282,12 +423,21 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        await context.bot.send_photo(
-            chat_id=channel_id,
-            photo=post_data.get("image"),
-            caption=post_data.get("text"),
-            reply_markup=reply_markup,
-        )
+        if post_data.get("image"):
+            # Send with image
+            await context.bot.send_photo(
+                chat_id=channel_id,
+                photo=post_data.get("image"),
+                caption=post_data.get("text", ""),
+                reply_markup=reply_markup,
+            )
+        else:
+            # Send text only
+            await context.bot.send_message(
+                chat_id=channel_id,
+                text=post_data.get("text", ""),
+                reply_markup=reply_markup,
+            )
 
         await query.message.edit_text("Post has been sent to the channel!")
         return ConversationHandler.END
@@ -297,19 +447,39 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
 
-async def handle_admin_forward(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle forwarded message for adding admin"""
-    if update.message.forward_from:
-        new_admin_id = str(update.message.forward_from.id)
-        admins.add(new_admin_id)
-        await update.message.reply_text(f"Admin added successfully!")
-    else:
-        await update.message.reply_text("Please forward a message from the user.")
-    return ConversationHandler.END
+async def handle_admin_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle admin ID input"""
+    try:
+        new_admin_id = str(update.message.text).strip()
+        if new_admin_id.isdigit():
+            admins.add(new_admin_id)
+            save_admins(admins)
+            await update.message.reply_text(
+                f"Admin with ID {new_admin_id} added successfully!"
+            )
+            return await admin_menu(update, context)
+        else:
+            await update.message.reply_text("Please enter a valid numeric Telegram ID.")
+            return WAITING_FOR_ADMIN_ID
+    except Exception as e:
+        await update.message.reply_text("Error adding admin. Please try again.")
+        return WAITING_FOR_ADMIN_ID
 
 
 async def handle_new_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle new URL input"""
+    if update.message.text == "/cancel":
+        keyboard = [
+            [InlineKeyboardButton("Manage Admins", callback_data="manage_admins")],
+            [InlineKeyboardButton("Manage URLs & Labels", callback_data="manage_urls")],
+            [InlineKeyboardButton("Insert Post", callback_data="insert_post")],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            "Operation cancelled. Back to main menu:", reply_markup=reply_markup
+        )
+        return MAIN_MENU
+
     new_url = update.message.text
     if "adding_new" in context.user_data:
         # Adding URL during post creation
@@ -325,6 +495,7 @@ async def handle_new_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append(
             [InlineKeyboardButton("Add New Label", callback_data="new_label")]
         )
+        keyboard.append([InlineKeyboardButton("Back", callback_data="insert_post")])
         reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_text(
             "Select a label or add a new one:", reply_markup=reply_markup
@@ -340,13 +511,33 @@ async def handle_new_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_new_label(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle new label input"""
+    if update.message.text == "/cancel":
+        keyboard = [
+            [InlineKeyboardButton("Manage Admins", callback_data="manage_admins")],
+            [InlineKeyboardButton("Manage URLs & Labels", callback_data="manage_urls")],
+            [InlineKeyboardButton("Insert Post", callback_data="insert_post")],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            "Operation cancelled. Back to main menu:", reply_markup=reply_markup
+        )
+        return MAIN_MENU
+
     new_label = update.message.text
     if "adding_new" in context.user_data:
         # Adding label during post creation
         context.user_data["post_data"]["label"] = new_label
         urls_and_labels["labels"].append(new_label)
         save_urls_and_labels(urls_and_labels)
-        await update.message.reply_text("Please enter the post text:")
+        keyboard = [
+            [InlineKeyboardButton("Add Text", callback_data="add_text")],
+            [InlineKeyboardButton("Skip Text", callback_data="skip_text")],
+            [InlineKeyboardButton("Back", callback_data="insert_post")],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            "Would you like to add text to your post?", reply_markup=reply_markup
+        )
         return WAITING_FOR_TEXT
     else:
         # Adding label from management menu
@@ -358,6 +549,18 @@ async def handle_new_label(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_url_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle URL editing"""
+    if update.message.text == "/cancel":
+        keyboard = [
+            [InlineKeyboardButton("Manage Admins", callback_data="manage_admins")],
+            [InlineKeyboardButton("Manage URLs & Labels", callback_data="manage_urls")],
+            [InlineKeyboardButton("Insert Post", callback_data="insert_post")],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            "Operation cancelled. Back to main menu:", reply_markup=reply_markup
+        )
+        return MAIN_MENU
+
     new_url = update.message.text
     old_url = context.user_data["editing_url"]
     idx = urls_and_labels["urls"].index(old_url)
@@ -369,6 +572,18 @@ async def handle_url_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_label_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle label editing"""
+    if update.message.text == "/cancel":
+        keyboard = [
+            [InlineKeyboardButton("Manage Admins", callback_data="manage_admins")],
+            [InlineKeyboardButton("Manage URLs & Labels", callback_data="manage_urls")],
+            [InlineKeyboardButton("Insert Post", callback_data="insert_post")],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            "Operation cancelled. Back to main menu:", reply_markup=reply_markup
+        )
+        return MAIN_MENU
+
     new_label = update.message.text
     old_label = context.user_data["editing_label"]
     idx = urls_and_labels["labels"].index(old_label)
@@ -382,8 +597,28 @@ async def handle_label_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle post text input"""
+    if update.message.text == "/cancel":
+        keyboard = [
+            [InlineKeyboardButton("Manage Admins", callback_data="manage_admins")],
+            [InlineKeyboardButton("Manage URLs & Labels", callback_data="manage_urls")],
+            [InlineKeyboardButton("Insert Post", callback_data="insert_post")],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            "Operation cancelled. Back to main menu:", reply_markup=reply_markup
+        )
+        return MAIN_MENU
+
     context.user_data["post_data"]["text"] = update.message.text
-    await update.message.reply_text("Please send the image for the post:")
+    keyboard = [
+        [InlineKeyboardButton("Add Image", callback_data="add_image")],
+        [InlineKeyboardButton("Skip Image", callback_data="skip_image")],
+        [InlineKeyboardButton("Back", callback_data="insert_post")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        "Would you like to add an image to your post?", reply_markup=reply_markup
+    )
     return WAITING_FOR_IMAGE
 
 
@@ -394,7 +629,11 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Show preview and confirmation buttons
         post_data = context.user_data["post_data"]
-        preview_text = f"Preview:\n\nURL: {post_data['url']}\nLabel: {post_data['label']}\nText: {post_data['text']}"
+        preview_text = (
+            f"Preview:\n\nURL: {post_data['url']}\nLabel: {post_data['label']}"
+        )
+        if post_data.get("text"):
+            preview_text += f"\nText: {post_data['text']}"
 
         keyboard = [
             [InlineKeyboardButton("Confirm & Send", callback_data="confirm_post")],
@@ -409,6 +648,63 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return WAITING_FOR_IMAGE
 
 
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancel current operation and return to main menu"""
+    keyboard = [
+        [InlineKeyboardButton("Manage Admins", callback_data="manage_admins")],
+        [InlineKeyboardButton("Manage URLs & Labels", callback_data="manage_urls")],
+        [InlineKeyboardButton("Insert Post", callback_data="insert_post")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        "Operation cancelled. Back to main menu:", reply_markup=reply_markup
+    )
+    return MAIN_MENU
+
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show help message with all available commands"""
+    help_text = """
+Available commands:
+/start - Start the bot and show main menu
+/help - Show this help message
+/cancel - Cancel current operation and return to main menu
+
+Navigation:
+- Use the buttons to navigate through menus
+- Use 'Back' buttons to go to previous menus
+- Use /cancel at any time to return to main menu
+
+Features:
+1. Manage Admins (Owner only):
+   - Add new admins
+   - View current admins
+   - Remove admins
+
+2. Manage URLs & Labels (Admins):
+   - Add/Edit/Delete URLs
+   - Add/Edit/Delete Labels
+   - View all URLs and Labels
+
+3. Create Posts (Admins):
+   - Select or add new URL
+   - Select or add new Label
+   - Optional text and image
+   - Preview before posting
+"""
+    await update.message.reply_text(help_text)
+
+
+async def post_init(application: Application):
+    """Set up bot commands"""
+    commands = [
+        BotCommand("start", "Start the bot and show main menu"),
+        BotCommand("help", "Show help message with available commands"),
+        BotCommand("cancel", "Cancel current operation and return to main menu"),
+    ]
+    await application.bot.set_my_commands(commands)
+
+
 def main():
     """Start the bot"""
     # Create application
@@ -419,7 +715,10 @@ def main():
         entry_points=[CommandHandler("start", start)],
         states={
             MAIN_MENU: [CallbackQueryHandler(button_handler)],
-            ADD_ADMIN: [MessageHandler(filters.ALL, handle_admin_forward)],
+            ADMIN_MENU: [CallbackQueryHandler(button_handler)],
+            WAITING_FOR_ADMIN_ID: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_admin_id)
+            ],
             MANAGE_URLS: [CallbackQueryHandler(button_handler)],
             ADD_NEW_URL: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_new_url)
@@ -438,13 +737,19 @@ def main():
             WAITING_FOR_TEXT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text)
             ],
-            WAITING_FOR_IMAGE: [MessageHandler(filters.PHOTO, handle_image)],
+            WAITING_FOR_IMAGE: [
+                MessageHandler(filters.PHOTO | filters.TEXT, handle_image)
+            ],
             CONFIRM_POST: [CallbackQueryHandler(button_handler)],
         },
-        fallbacks=[],
+        fallbacks=[CommandHandler("cancel", cancel)],
     )
 
     application.add_handler(conv_handler)
+    application.add_handler(CommandHandler("help", help_command))
+
+    # Set up commands
+    application.post_init = post_init
 
     # Start the bot
     application.run_polling()
